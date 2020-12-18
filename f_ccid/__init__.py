@@ -1,4 +1,4 @@
-# Copyright (C) 2016-2017  Vincent Pelletier <plr.vincent@gmail.com>
+# Copyright (C) 2016-2020  Vincent Pelletier <plr.vincent@gmail.com>
 #
 # This file is part of python-usb-f-ccid.
 # python-usb-f-ccid is free software; you can redistribute it and/or
@@ -13,417 +13,477 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with python-usb-f-ccid.  If not, see <http://www.gnu.org/licenses/>.
-import select
-from . import functionfs
+
 import ctypes
-
-class USBICCDescriptor(functionfs.LittleEndianDescriptorStructure):
-    _bDescriptorType = 0x21
-    _fields_ = [
-        ('bcdCCID', ctypes.c_ushort),
-        ('bMaxSlotIndex', ctypes.c_ubyte),
-        ('bVoltageSupport', ctypes.c_ubyte),
-        ('dwProtocols', ctypes.c_uint),
-        ('dwDefaultClock', ctypes.c_uint),
-        ('dwMaximumClock', ctypes.c_uint),
-        ('bNumClockSupported', ctypes.c_ubyte),
-        ('dwDataRate', ctypes.c_uint),
-        ('dwMaxDataRate', ctypes.c_uint),
-        ('bNumDataRatesSupported', ctypes.c_ubyte),
-
-        ('dwMaxIFSD', ctypes.c_uint),
-        ('dwSynchProtocols', ctypes.c_uint),
-        ('dwMechanical', ctypes.c_uint),
-        ('dwFeatures', ctypes.c_uint),
-        ('dwMaxCCIDMessageLength', ctypes.c_uint),
-        ('bClassGetResponse', ctypes.c_ubyte),
-        ('bClassEnvelope', ctypes.c_ubyte),
-        ('wLcdLayout', ctypes.c_ushort),
-        ('bPinSupport', ctypes.c_ubyte),
-        ('bMaxCCIDBusySlots', ctypes.c_ubyte),
-    ]
-
-INTERFACE_DESCRIPTOR = functionfs.getDescriptor(
-    functionfs.USBInterfaceDescriptor,
-    bInterfaceNumber=0,
-    bAlternateSetting=0,
-    bNumEndpoints=2, # bulk-IN, bulk-OUT
-    bInterfaceClass=0x0b, # Smart Card Device Class
-    bInterfaceSubClass=0,
-    bInterfaceProtocol=0, # bulk pair, optional interrupt
-    iInterface=1,
-)
-
-ICC_DESCRIPTOR = functionfs.getDescriptor(
+import errno
+from functools import partial
+import struct
+import functionfs
+from functionfs import ch9
+from .usb import (
+    CCID_CLASS_AUTO_BAUD,
+    CCID_CLASS_AUTO_CLOCK,
+    CCID_CLASS_AUTO_CONF_ATR,
+    CCID_CLASS_AUTO_IFSD,
+    CCID_CLASS_AUTO_PPS_PROP,
+    CCID_CLASS_AUTO_VOLTAGE,
+    CCID_CLASS_EXTENDED_APDU,
+    CCID_PROTOCOL_T1,
+    CCID_REQ_ABORT,
+    CCID_REQ_GET_CLOCK_FREQUENCIES,
+    CCID_REQ_GET_DATA_RATES,
+    CCID_VOLTAGE_SUPPORT_5V,
+    CHAIN_BEGIN_AND_END,
+    CHAIN_CONTINUE,
+    CHAIN_TO_START_STOP_DICT,
+    CLOCK_STATUS_RUNNING,
+    CLOCK_STATUS_STOPPED,
+    COMMAND_STATUS_FAILED,
+    DATA_MAX_LENGTH,
+    ERROR_BAD_LENGTH,
+    ERROR_BAD_WLEVEL,
+    ERROR_CMD_ABORTED,
+    ERROR_CMD_NOT_SUPPORTED,
+    ERROR_ICC_MUTE,
+    ERROR_PROTOCOLNUM_NOT_SUPPORTED,
+    ERROR_POWERSELECT_NOT_SUPPORTED,
+    ERROR_SLOT_DOES_NOT_EXIST,
+    ICC_STATUS_NOT_PRESENT,
+    MESSAGE_TYPE_ABORT,
+    MESSAGE_TYPE_GET_PARAMETERS,
+    MESSAGE_TYPE_GET_SLOT_STATUS,
+    MESSAGE_TYPE_ICC_CLOCK,
+    MESSAGE_TYPE_MECHANICAL,
+    MESSAGE_TYPE_POWER_OFF,
+    MESSAGE_TYPE_POWER_ON,
+    MESSAGE_TYPE_RESET_PARAMETERS,
+    MESSAGE_TYPE_SET_PARAMETERS,
+    MESSAGE_TYPE_SET_RATE_AND_CLOCK,
+    MESSAGE_TYPE_XFR_BLOCK,
+    START_STOP_TO_CHAIN_DICT,
     USBICCDescriptor,
-    bcdCCID=0x0110,
-    bMaxSlotIndex=0,
-    bVoltageSupport=1,
-    dwProtocols=2, # Protocol T=1
-    dwDefaultClock=0xdfc,
-    dwMaximumClock=0xdfc,
-    bNumClockSupported=0,
-    dwDataRate=0x2580,
-    dwMaxDataRate=0x2580,
-    bNumDataRatesSupported=0,
-
-    dwMaxIFSD=0xfe, # For Protocol T=1
-    dwSynchProtocols=0,
-    dwMechanical=0,
-    dwFeatures=0x40840, # Short and extended APDU level exchanges
-    dwMaxCCIDMessageLength=65544 + 10,
-    bClassGetResponse=0xff,
-    bClassEnvelope=0xff,
-    wLcdLayout=0,
-    bPinSupport=0,
-    bMaxCCIDBusySlots=1,
 )
-
-EP_BULK_OUT_DESCRIPTOR = functionfs.getDescriptor(
-    functionfs.USBEndpointDescriptorNoAudio,
-    bEndpointAddress=1 | functionfs.USB_DIR_OUT,
-    bmAttributes=2,
-    wMaxpacketSize=512,
-    bInterval=0,
+from .iccd import (
+    ICCDMessageBase,
+    ICCDNotifySlotChange,
+    ICCDRequestBase,
+    ICCD_REQUEST_SET_PARAMETERS_T0_LENGTH,
+    ICCD_REQUEST_SET_PARAMETERS_T1_LENGTH,
 )
+from .slot import ABORT_MARKER, ICCDSlot
 
-EP_BULK_IN_DESCRIPTOR = functionfs.getDescriptor(
-    functionfs.USBEndpointDescriptorNoAudio,
-    bEndpointAddress=2 | functionfs.USB_DIR_IN,
-    bmAttributes=2,
-    wMaxpacketSize=512,
-    bInterval=0,
-)
-
-# XXX: Unused
-#EP_INTR_IN_DESCRIPTOR = functionfs.getDescriptor(
-#    functionfs.USBEndpointDescriptorNoAudio,
-#    bEndpointAddress=3 | functionfs.USB_DIR_IN,
-#    bmAttributes=3,
-#    wMaxpacketSize=64,
-#    bInterval=255,
-#)
-
-DESC_LIST = (
-    INTERFACE_DESCRIPTOR,
-    ICC_DESCRIPTOR,
-    EP_BULK_OUT_DESCRIPTOR,
-    EP_BULK_IN_DESCRIPTOR,
-)
-
-STATE_INITIAL = 0
-STATE_APDU_COMMAND_WAIT = 1
-STATE_APDU_COMMAND_PARTIAL = 2
-STATE_APDU_RESPONSE_PARTIAL = 3
-
-MESSAGE_TYPE_POWER_ON = 0x62
-MESSAGE_TYPE_POWER_OFF = 0x63
-MESSAGE_TYPE_XFR_BLOCK = 0x6f
-MESSAGE_TYPE_DATA_BLOCK = 0x80
-MESSAGE_TYPE_SLOT_STATUS = 0x81
-
-CHAIN_BEGIN_AND_END = 0
-CHAIN_BEGIN = 1
-CHAIN_END = 2
-CHAIN_INTERMEDIATE = 3
-CHAIN_CONTINUE = 0x10
-
-ICC_STATUS_ACTIVE = 0
-ICC_STATUS_INACTIVE = 1
-ICC_STATUS_NOT_PRESENT = 2
-
-COMMAND_STATUS_OK = 0
-COMMAND_STATUS_FAILED = 1
-COMMAND_STATUS_TIME_EXT = 2
-
-ERROR_OK = 0
-ERROR_ICC_MUTE = -2
-ERROR_XFR_OVERRUN = -4
-ERROR_HW_ERROR = -5
-
-# MESSAGE_TYPE: (ICCDBulkMessageHead.u.?, init_kw, has_payload)
-_BULK_MESSAGE_TYPE_INIT = {
-    MESSAGE_TYPE_POWER_ON: ('power_on', (('bReserved', 1), ('abRFU', (0, 0))), False),
-    MESSAGE_TYPE_POWER_OFF: ('power_off', (('abRFU', (0, 0, 0)), ), False),
-    MESSAGE_TYPE_XFR_BLOCK: ('xfr_block', (('bReserved', 0), ), True),
-    MESSAGE_TYPE_DATA_BLOCK: ('data_block', (), True),
-    MESSAGE_TYPE_SLOT_STATUS: ('slot_status', (('bReserved', 0), ), False),
-}
-
-class ICCDBulkMessageHead(ctypes.LittleEndianStructure):
-    _pack_ = 1
-    _fields_ = [
-        ('bMessageType', ctypes.c_ubyte),
-        ('dwLength', ctypes.c_uint),
-        ('bSlot', ctypes.c_ubyte),
-        ('bSeq', ctypes.c_ubyte),
-        (
-            'u',
-            type(
-                'ICCDBulkMessageUnion',
-                (ctypes.Union, ),
-                {
-                    '_fields_': [
-                        (
-                            'power_on',
-                            type(
-                                'ICCDBulkMessagePowerOn',
-                                (ctypes.LittleEndianStructure, ),
-                                {
-                                    '_pack_': 1,
-                                    '_fields_': [
-                                        ('bReserved', ctypes.c_ubyte),
-                                        ('abRFU', ctypes.c_ubyte * 2),
-                                    ],
-                                },
-                            ),
-                        ),
-                        (
-                            'power_off',
-                            type(
-                                'ICCDBulkMessagePowerOff',
-                                (ctypes.LittleEndianStructure, ),
-                                {
-                                    '_pack_': 1,
-                                    '_fields_': [
-                                        ('abRFU', ctypes.c_ubyte * 3),
-                                    ],
-                                },
-                            ),
-                        ),
-                        (
-                            'xfr_block',
-                            type(
-                                'ICCDBulkMessageXfrBlock',
-                                (ctypes.LittleEndianStructure, ),
-                                {
-                                    '_pack_': 1,
-                                    '_fields_': [
-                                        ('bReserved', ctypes.c_ubyte),
-                                        ('wLevelParameter', ctypes.c_ushort),
-                                    ],
-                                },
-                            ),
-                        ),
-                        (
-                            'data_block',
-                            type(
-                                'ICCDBulkMessageDataBlock',
-                                (ctypes.LittleEndianStructure, ),
-                                {
-                                    '_fields_': [
-                                        ('bmICCStatus', ctypes.c_ubyte, 2),
-                                        ('bmReserved', ctypes.c_ubyte, 4),
-                                        ('bmCommandStatus', ctypes.c_ubyte, 2),
-                                        ('bError', ctypes.c_byte),
-                                        ('bChainParameter', ctypes.c_ubyte),
-                                    ],
-                                },
-                            ),
-                        ),
-                        (
-                            'slot_status',
-                            type(
-                                'ICCDBulkMessageSlotStatus',
-                                (ctypes.LittleEndianStructure, ),
-                                {
-                                    '_pack_': 1,
-                                    '_fields_': [
-                                        ('bmICCStatus', ctypes.c_ubyte, 2),
-                                        ('bmReserved', ctypes.c_ubyte, 4),
-                                        ('bmCommandStatus', ctypes.c_ubyte, 2),
-                                        ('bError', ctypes.c_byte),
-                                        ('bReserved', ctypes.c_ubyte),
-                                    ],
-                                },
-                            ),
-                        ),
-                    ],
-                },
-            ),
-        ),
-    ]
-
-ICC_BULK_HEAD_LEN = 10
-assert ctypes.sizeof(ICCDBulkMessageHead) == ICC_BULK_HEAD_LEN
-
-def getICCDBulkMessage(message_type, slot, seq, data=b'', **kw):
-    union_key, union_init, has_payload = _BULK_MESSAGE_TYPE_INIT[message_type]
-    if data and not has_payload:
-        raise ValueError(
-            'Message type 0x%02x cannot have a payload' % (
-                message_type,
-            ),
-        )
-    for key, value in union_init:
-        kw.setdefault(key, value)
-    return functionfs.serialise(ICCDBulkMessageHead(
-        bMessageType=message_type,
-        dwLength=ctypes.sizeof(ICCDBulkMessageHead) + len(data),
-        bSeq=seq,
-        **{
-            union_key: kw,
-        }
-    )) + data
-
-# From gnuk:
-# ATR (Answer To Reset) string
-# TS = 0x3b: Direct convention
-# T0 = 0xda: TA1, TC1 and TD1 follow, 10 historical bytes
-# TA1 = 0x11: FI=1, DI=1
-# TC1 = 0xff
-# TD1 = 0x81: TD2 follows, T=1
-# TD2 = 0xb1: TA3, TB3 and TD3 follow, T=1
-# TA3 = 0xFE: IFSC = 254 bytes
-# TB3 = 0x55: BWI = 5, CWI = 5   (BWT timeout 3.2 sec)
-# TD3 = 0x1f: TA4 follows, T=15
-# TA4 = 0x03: 5V or 3.3V
-# Minimum: 0x3b, 0x8a, 0x80, 0x01
-ATR_HEAD = b'\x3b\xda\x11\xff\x81\xb1\xfe\x55\x1f\x03'
-
-# 0x0a
-# 0x00,
-# 0x31, 0x84,                   Full DF name, GET DATA, MF
-# 0x73,
-# 0x80, 0x01, 0x80,             Full DF name
-#                               1-byte
-#                               Command chaining, No extended Lc and Le
-# 0x00,
-# 0x90, 0x00                    Status info
-HISTORICAL_BYTES = b'\x0a\x00\x31\x84\x73\x80\x01\x80\x00\x90\x00'
-
-if sys.version_info[:2] > (2, 7):
-    # In python 3, items of bytes are ints
-    def _xor(byte_value):
-        result = 0
-        for item in byte_value:
-            result ^= item
-        return result
-else:
-    # In python 2, items of bytes are chars
-    def _xor(byte_value):
-        result = 0
-        for item in byte_value:
-            result ^= ord(item)
-        return result
-ATR_DATA = ATR_HEAD + HISTORICAL_BYTES
-ATR_DATA += _xor(ATR_DATA)
+class EndpointOUTFile(functionfs.EndpointOUTFile):
+    def __init__(self, onComplete, *args, **kw):
+        self.onComplete = onComplete
+        super().__init__(*args, **kw)
 
 class ICCDFunction(functionfs.Function):
-    _state = None
+    """
+    USB function declaration an request handler implementing the USB SmartCard
+    CCID interface class in bulk transfer mode.
+    """
+    BULK_IN_INDEX = 1
+    BULK_OUT_INDEX = 2
+    INT_IN_INDEX = 3
 
-    def __init__(self, path):
-        super(ICCDFunction, self).__init__(
+    def __init__(self, path, slot_count=1):
+        self._enabled = False
+        self.slot_list = tuple(
+            ICCDSlot(onEvent=self.__notifySlotChange)
+            for _ in range(slot_count)
+        )
+        # Pick the same values as USB-ICC ICCD rev 1.0 . These values are
+        # meaningless anyway.
+        self._clock_list = clock_list = [3580] # kHz
+        self._rate_list = rate_list = [9600] # bps
+        # Each slot takes 2 bits, so 4 slots per bmSlotICCState byte.
+        interrupt_bytes, remainder = divmod(slot_count, 4)
+        if remainder:
+            interrupt_bytes += 1
+        fs_list, hs_list, ss_list = functionfs.getInterfaceInAllSpeeds(
+            interface={
+                'bInterfaceClass': ch9.USB_CLASS_CSCID,
+                'iInterface': 1,
+            },
+            endpoint_list=[
+                {
+                    'endpoint': {
+                        'bEndpointAddress': self.BULK_IN_INDEX | ch9.USB_DIR_IN,
+                        'bmAttributes': ch9.USB_ENDPOINT_XFER_BULK,
+                    },
+                },
+                {
+                    'endpoint': {
+                        'bEndpointAddress': self.BULK_OUT_INDEX | ch9.USB_DIR_OUT,
+                        'bmAttributes': ch9.USB_ENDPOINT_XFER_BULK,
+                    },
+                },
+                {
+                    'endpoint': {
+                        'bEndpointAddress': self.INT_IN_INDEX | ch9.USB_DIR_IN,
+                        'bmAttributes': ch9.USB_ENDPOINT_XFER_INT,
+                        # add bMessageType byte
+                        'wMaxPacketSize': interrupt_bytes + 1,
+                        'bInterval': 255,
+                    },
+                },
+            ],
+            class_descriptor_list=[
+                functionfs.getDescriptor(
+                    USBICCDescriptor,
+                    bcdCCID=0x0110, # CCID spec rev 1.1
+                    bMaxSlotIndex=slot_count - 1,
+                    bVoltageSupport=CCID_VOLTAGE_SUPPORT_5V,
+                    dwProtocols=CCID_PROTOCOL_T1, # T1 only
+                    dwDefaultClock=max(clock_list),
+                    dwMaximumClock=max(clock_list),
+                    bNumClockSupported=(
+                        0
+                        if len(clock_list) == 1 else
+                        len(clock_list)
+                    ),
+                    dwDataRate=max(rate_list),
+                    dwMaxDataRate=max(rate_list),
+                    bNumDataRatesSupported=(
+                        0
+                        if len(rate_list) == 1 else
+                        len(rate_list)
+                    ),
+                    dwMaxIFSD=254, # only possible value for CCID_PROTOCOL_T1
+                    dwSynchProtocols=0, # fixed for legacy reasons
+                    dwMechanical=0, # fixed for legacy reasons
+                    dwFeatures=(
+                        CCID_CLASS_AUTO_CONF_ATR |
+                        CCID_CLASS_AUTO_VOLTAGE |
+                        CCID_CLASS_AUTO_CLOCK |
+                        CCID_CLASS_AUTO_BAUD |
+                        CCID_CLASS_AUTO_PPS_PROP |
+                        CCID_CLASS_AUTO_IFSD |
+                        CCID_CLASS_EXTENDED_APDU
+                    ),
+                    # "extended APDU"'s longest message for BULK mode,
+                    # between 261+10 and 65544+10. Pick the largest.
+                    dwMaxCCIDMessageLength=65554,
+                    bClassGetResponse=0xff,
+                    bClassEnvelope=0xff,
+                    wLcdLayout=0, # fixed for legacy reasons
+                    bPinSupport=0, # fixed for legacy reasons
+                    bMaxCCIDBusySlots=slot_count,
+                ),
+            ],
+        )
+        super().__init__(
             path,
-            fs_list=DESC_LIST,
-            hs_list=DESC_LIST,
-            ss_list=DESC_LIST,
+            fs_list=fs_list,
+            hs_list=hs_list,
+            ss_list=ss_list,
             lang_dict={
                 0x0409: (
-                    'Edison ICCD'.decode('ASCII'),
+                    'python-usb-f-ccid',
                 ),
             },
         )
 
+    def onBind(self):
+        """
+        Called by FunctionFS when the gadget gets bound to the bus.
+        """
+        super().onBind()
+        self.__notifySlotChange()
+
+    def onUnbind(self):
+        """
+        Called by FunctionFS when the gadget gets unbound from the bus.
+        """
+        self._enabled = False
+        for slot in self.slot_list:
+            slot.powerOff()
+        super().onUnbind()
+
     def onEnable(self):
-        self._state = STATE_INITIAL
+        """
+        Called by FunctionFS when this function is enabled by an host.
+        """
+        super().onEnable()
+        self._enabled = True
+        self.__notifySlotChange()
 
     def onDisable(self):
-        self._state = None
+        """
+        Called by FunctionFS when this function is disabled by an host.
+        """
+        self._enabled = False
+        for slot in self.slot_list:
+            slot.powerOff()
+        super().onDisable()
 
-    __event_dict = {
-        MESSAGE_TYPE_POWER_ON: 'onPowerOn',
-        MESSAGE_TYPE_POWER_OFF: 'onPowerOff',
-        MESSAGE_TYPE_XFR_BLOCK: 'onXfrBlock',
-    }
+    #def onSuspend(self):
+    #    """
+    #    Called by FunctionFS when USB bus enters suspended state.
+    #    """
+    #    for slot in self.slot_list:
+    #        slot.powerOff()
+    #    super().onSuspend()
+    #
+    #def onResume(self):
+    #    """
+    #    Called by FunctionFS when USB bus resumes from suspended state.
+    #    """
+    #    self.__notifySlotChange()
+    #    super().onResume()
 
-    def __processICCD(self, iterator):
-        infile = self.getEndpoint(1)
-        outfile = self.getEndpoint(2)
-        iccd_head_buf = bytearray(ICC_BULK_HEAD_LEN)
-        icc_head = ICCDBulkMessageHead.frombuffer(iccd_head_buf)
-        event_dict = self.__event_dict
-        for _ in iterator:
-            infile.readinto(iccd_head_buf)
-            message_type = icc_head.bMessageType
+    def onSetup(self, request_type, request, value, index, length):
+        """
+        Called by FunctionFS when a SETUP packet was received for this
+        interface or one of its endpoints.
+        """
+        if (
+            request_type & ch9.USB_TYPE_MASK == ch9.USB_TYPE_CLASS and
+            request_type & ch9.USB_RECIP_MASK == ch9.USB_RECIP_INTERFACE
+        ):
+            if (request_type & ch9.USB_DIR_IN) == ch9.USB_DIR_IN:
+                if request == CCID_REQ_GET_CLOCK_FREQUENCIES:
+                    response = b''.join(
+                        (
+                            struct.pack('<I', x)
+                            for x in self._clock_list
+                        ),
+                    )[:length]
+                    self.ep0.write(response)
+                    return
+                if request == CCID_REQ_GET_DATA_RATES:
+                    response = b''.join(
+                        (
+                            struct.pack('<I', x)
+                            for x in self._rate_list
+                        ),
+                    )[:length]
+                    self.ep0.write(response)
+                    return
+            else:
+                if request == CCID_REQ_ABORT:
+                    slot_index = value & 0xff
+                    try:
+                        slot = self.slot_list[slot_index]
+                    except KeyError:
+                        self.ep0.halt(request_type)
+                    response = slot.abortFromControl(
+                        sequence=value >> 8,
+                    )
+                    if response is not ABORT_MARKER:
+                        self.__submitINIterator(
+                            self.BULK_IN_INDEX,
+                            response,
+                        )
+                    self.ep0.read(0)
+                    return
+        super().onSetup(
+            request_type,
+            request,
+            value,
+            index,
+            length,
+        )
+
+    def __submitINIterator(self, endpoint_index, response):
+        """
+        response must be an iterable of at least one item, each item having
+        2 elements:
+        - message header: an ICCDMessageBase subclass instance
+        - message body: a bytearray or None
+        """
+        # XXX: handle EAGAIN ? seems unlikely to be reauired...
+        buffer_list = []
+        for head, body in response:
+            buffer_list.append(functionfs.serialise(head))
+            if body:
+                buffer_list.append(body)
+        if not buffer_list:
+            raise ValueError('Empty submission')
+        self.getEndpoint(endpoint_index).submit(buffer_list)
+
+    def __notifySlotChange(self):
+        """
+        Update host on all slots which changed since previous notification.
+        Does nothing if this function is not enabled by host.
+        """
+        if self._enabled:
+            self.__submitINIterator(
+                endpoint_index=self.INT_IN_INDEX,
+                response=(
+                    (
+                        ICCDNotifySlotChange([
+                            x.getSlotChangeNotification()
+                            for x in self.slot_list
+                        ]),
+                        None,
+                    ),
+                ),
+            )
+
+    def __onOUTComplete(self, data, status):
+        """
+        Parses ICCD header, calls onICCDRequest and sends the response(s)
+        to host.
+        """
+        if status < 0:
+            if status == -errno.ESHUTDOWN:
+                return
+            raise IOError(status)
+        message = ICCDRequestBase.guess_subtype_from_buffer(data)
+        response = self.onICCDRequest(
+            head=message,
+            body=data[ctypes.sizeof(message):],
+        )
+        # If we receive ABORT_MARKER it means we received abort through bulk
+        # endpoint before receiving it through control endpoint.
+        # No response may go out right now, self.onSetup will send it later.
+        if response is not ABORT_MARKER:
+            self.__submitINIterator(
+                endpoint_index=self.BULK_IN_INDEX,
+                response=response,
+            )
+
+    def getEndpointClass(self, is_in, descriptor):
+        if is_in:
+            return super().getEndpointClass(is_in=is_in, descriptor=descriptor)
+        assert descriptor.bEndpointAddress == self.BULK_OUT_INDEX, (
+            descriptor.bEndpointAddress
+        )
+        return partial(EndpointOUTFile, onComplete=self.__onOUTComplete)
+
+    def onICCDRequest(self, head, body):
+        """
+        Handles one ICCD request. Inspired by WSGI design.
+        """
+        message_type = head.bMessageType
+        try:
+            slot = self.slot_list[head.bSlot]
+        except KeyError:
+            # No command may run on a non-existant slot
+            return (head.getResponse(
+                bmICCStatus=ICC_STATUS_NOT_PRESENT,
+                bmCommandStatus=COMMAND_STATUS_FAILED,
+                bError=ERROR_SLOT_DOES_NOT_EXIST,
+            ), )
+
+        getErrorResponse = lambda error, **kw: head.getResponse(
+            bmICCStatus=slot.status,
+            bmCommandStatus=COMMAND_STATUS_FAILED,
+            bError=error,
+            **kw
+        )
+        getResponse = lambda **kw: head.getResponse(
+            bmICCStatus=slot.status,
+            **kw
+        )
+
+        if message_type == MESSAGE_TYPE_ABORT:
+            if head.dwLength:
+                return (getErrorResponse(ERROR_BAD_LENGTH), )
+            return (slot.abortFromBulk(getResponse(
+                bClockStatus=CLOCK_STATUS_RUNNING,
+            )), )
+        elif message_type == MESSAGE_TYPE_POWER_OFF:
+            slot.powerOff()
+            return (getResponse(bClockStatus=CLOCK_STATUS_RUNNING), )
+        elif message_type == MESSAGE_TYPE_GET_SLOT_STATUS:
+            if head.dwLength:
+                return (getErrorResponse(ERROR_BAD_LENGTH), )
+            return (getResponse(bClockStatus=CLOCK_STATUS_RUNNING), )
+        elif message_type == MESSAGE_TYPE_SET_RATE_AND_CLOCK: # Single-clock
+            return (getErrorResponse(ERROR_CMD_NOT_SUPPORTED), )
+
+        # All other commands require a card being present
+        if slot.status == ICC_STATUS_NOT_PRESENT:
+            return (getErrorResponse(ERROR_ICC_MUTE), )
+
+        if message_type in (
+            MESSAGE_TYPE_GET_PARAMETERS,
+            MESSAGE_TYPE_RESET_PARAMETERS,
+            MESSAGE_TYPE_SET_PARAMETERS,
+        ):
+            if message_type == MESSAGE_TYPE_SET_PARAMETERS:
+                if head.bProtocolNum != 1:
+                    return (getErrorResponse(
+                        ERROR_PROTOCOLNUM_NOT_SUPPORTED,
+                        bProtocolNum=0, # Placeholder
+                    ), )
+                if head.dwLength not in (
+                    # T0 is not supported anyway
+                    #ICCD_REQUEST_SET_PARAMETERS_T0_LENGTH,
+                    ICCD_REQUEST_SET_PARAMETERS_T1_LENGTH,
+                ):
+                    return (getErrorResponse(
+                        ERROR_BAD_LENGTH,
+                        bProtocolNum=0, # Placeholder
+                    ), )
+            else:
+                if head.dwLength:
+                    return (getErrorResponse(
+                        ERROR_BAD_LENGTH,
+                        bProtocolNum=0, # Placeholder
+                    ), )
+            return (getResponse(
+                bProtocolNum=1,
+                bmFindexDindex=0x11,
+                bmTCCKST=0x11,
+                bGuardTimeT=0xfe,
+                bmWaitingIntegersT=0x55,
+                bClockStop=CLOCK_STATUS_STOPPED,
+                bIFSC=0xfe,
+                bNadValue=0,
+            ), )
+        elif message_type == MESSAGE_TYPE_ICC_CLOCK: # Cannot stop clock
+            return (getErrorResponse(ERROR_CMD_NOT_SUPPORTED), )
+        elif message_type == MESSAGE_TYPE_MECHANICAL: # No motor in reader
+            return (getErrorResponse(ERROR_CMD_NOT_SUPPORTED), )
+
+        # Abort all other commands if there is an abort going on.
+        if slot.isAborting():
+            return (getErrorResponse(ERROR_CMD_ABORTED), )
+
+        if message_type == MESSAGE_TYPE_POWER_ON:
+            if head.dwLength:
+                return (getErrorResponse(ERROR_BAD_LENGTH), )
+            if head.bPowerSelect:
+                return (getErrorResponse(ERROR_POWERSELECT_NOT_SUPPORTED), )
+            return (getResponse(
+                bChainParameter=CHAIN_BEGIN_AND_END,
+                body=slot.powerOn(),
+            ), )
+        elif message_type == MESSAGE_TYPE_XFR_BLOCK:
+            if len(body) != head.dwLength:
+                return (getErrorResponse(ERROR_BAD_LENGTH), )
             try:
-                method_id = event_dict[message_type]
+                start, stop = CHAIN_TO_START_STOP_DICT[head.wLevelParameter]
             except KeyError:
-                infile.halt()
-                infile.flushFIFO()
-                continue
-            if icc_head.bSlot != 0:
-                infile.halt()
-                infile.flushFIFO()
-                continue
-            if icc_head.dwLength:
-                data = infile.read(icc_head.dwLength)
-            else:
-                data = ''
-            kw = {}
-            if message_type == MESSAGE_TYPE_XFR_BLOCK:
-                kw['level'] = icc_head.u.xfr_block.wLevelParameter
-            try:
-                # XXX: not nice to rely on called method to set seq...
-                response = getattr(self, method_id)(
-                    seq=icc_head.bSeq,
-                    data=data,
-                    **kw
-                )
-            except BaseException:
-                # On *ANY* exception, halt endpoint
-                outfile.halt()
-                raise
-            else:
-                outfile.write(response)
-
-    def onPowerOn(self, seq, data):
-        self._state = STATE_INITIAL
-        return getICCDBulkMessage(
-            message_type=MESSAGE_TYPE_DATA_BLOCK,
-            slot=0,
-            seq=seq,
-            bmICCStatus=ICC_STATUS_ACTIVE,
-            bmCommandStatus=COMMAND_STATUS_OK,
-            bError=ERROR_OK,
-            bChainParameter=CHAIN_BEGIN_AND_END,
-            data=ATR_DATA,
-        )
-
-    def onPowerOff(self, seq, data):
-        self._state = STATE_INITIAL
-        return getICCDBulkMessage(
-            message_type=MESSAGE_TYPE_SLOT_STATUS,
-            slot=0,
-            seq=seq,
-            bmICCStatus=ICC_STATUS_INACTIVE,
-            bmCommandStatus=COMMAND_STATUS_OK,
-            bError=ERROR_OK,
-        )
-
-    def onXfrBlock(self, seq, level, data):
-
-# Commands used by gnupg's scd
-CMD_SELECT_FILE = 0xa4
-CMD_VERIFY = 0x20
-CMD_CHANGE_REFERENCE_DATA = 0x24
-CMD_RESET_RETRY_COUNTER = 0x2c
-CMD_GET_DATA = 0xca
-CMD_PUT_DATA = 0xda
-CMD_MSE = 0x22
-CMD_PSO = 0x2a
-CMD_INTERNAL_AUTHENTICATE = 0x88
-CMD_GENERATE_KEYPAIR = 0x47
-CMD_GET_CHALLENGE = 0x84
-CMD_READ_BINARY = 0xb0
-CMD_READ_RECORD = 0xb2
-
-class APDUHead(ctypes.Structure):
-    # XXX: endianness ?
-    # XXX: packing ?
-    _fields_ = [
-        ('class', ctypes.c_ubyte),
-        ('ins', ctypes.c_ubyte),
-        ('p0', ctypes.c_ubyte),
-        ('p1', ctypes.c_ubyte),
-    ]
+                return (getErrorResponse(ERROR_BAD_WLEVEL), )
+            if start:
+                slot.clearAPDU()
+            slot.storeAPDU(body)
+            if stop:
+                response_body = slot.runAPDU()
+                result = []
+                chunk_cutoff = 0
+                start = True
+                while True:
+                    previous_cutoff = chunk_cutoff
+                    chunk_cutoff += DATA_MAX_LENGTH
+                    chunk = response_body[previous_cutoff:chunk_cutoff]
+                    stop = len(chunk) < DATA_MAX_LENGTH
+                    result.append(getResponse(
+                        bChainParameter=START_STOP_TO_CHAIN_DICT[
+                            (start, stop)
+                        ],
+                        body=chunk,
+                    ))
+                    if stop:
+                        break
+                    start = False
+                return result
+            return (getResponse(bChainParameter=CHAIN_CONTINUE), )
+        #elif message_type == MESSAGE_TYPE_ESCAPE: # No special CCID features
+        #elif message_type == MESSAGE_TYPE_T0_APDU: # No T=0 protocol support
+        #elif message_type == MESSAGE_TYPE_SECURE: # No pin pad
+        return (getErrorResponse(ERROR_CMD_NOT_SUPPORTED), )

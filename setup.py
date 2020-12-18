@@ -1,4 +1,4 @@
-# Copyright (C) 2016-2017  Vincent Pelletier <plr.vincent@gmail.com>
+# Copyright (C) 2016-2020  Vincent Pelletier <plr.vincent@gmail.com>
 #
 # This file is part of python-usb-f-ccid.
 # python-usb-f-ccid is free software; you can redistribute it and/or
@@ -26,7 +26,7 @@ setup(
     name='usb-f-ccid',
     description=next(x for x in long_description.splitlines() if x.strip()),
     long_description='.. contents::\n\n' + long_description,
-    keywords='linux usb gadget ccid gnupg',
+    keywords='linux usb gadget ccid iccd',
     version='0.1',
     author='Vincent Pelletier',
     author_email='plr.vincent@gmail.com',
@@ -35,12 +35,11 @@ setup(
     platforms=['linux'],
     packages=['f_ccid'],
     install_requires=[
-        'ioctl-opt',
+        'functionfs',
     ],
     classifiers=[
         'License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)',
-        'Operating System :: OS Independent',
-        'Programming Language :: Python :: 2.7',
+        'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: Implementation :: CPython',
         'Programming Language :: Python :: Implementation :: PyPy',
