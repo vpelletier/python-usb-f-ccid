@@ -19,7 +19,6 @@ from .usb import (
     ICC_STATUS_INACTIVE,
     ICC_STATUS_ACTIVE,
 )
-from .utils import chainBytearrayList
 
 ABORT_MARKER = object()
 
@@ -162,6 +161,15 @@ class ICCDSlot:
         """
         Send stored APDU to card and return its response.
         """
-        result = self._card.runAPDU(chainBytearrayList(self._data))
+        data_list = self._data
+        if len(data_list) == 1:
+            data = data_list[0]
+        else:
+            data = bytearray(sum(len(x) for x in data_list))
+            base = 0
+            for chunk in data_list:
+                old_base = base
+                base += len(chunk)
+                data[old_base:base] = chunk
         self.clearAPDU()
-        return result
+        return self._card.runAPDU(data)

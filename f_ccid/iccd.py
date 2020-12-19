@@ -17,6 +17,7 @@
 # pylint: disable=missing-docstring, too-many-ancestors
 
 import ctypes
+from functools import partial
 from .usb import (
     COMMAND_STATUS_OK,
     MESSAGE_TYPE_ABORT,
@@ -41,12 +42,25 @@ from .usb import (
     MESSAGE_TYPE_T0_APDU,
     MESSAGE_TYPE_XFR_BLOCK,
 )
-from .utils import metaclassmethod
 
 NO_DATA = bytearray()
 
 class PackedLittleEndianStructure(ctypes.LittleEndianStructure):
     _pack_ = 1
+
+class metaclassmethod:
+    """
+    Methods get the instance they are called on as first argument.
+    Class methods get the class they are defined in as first argument.
+    This class implements a mix of both above for use on metaclass methods:
+    they get the (meta)class they are defined on as first argument and the
+    class they are called from as second argument.
+    """
+    def __init__(self, func):
+        self.__func = func
+
+    def __get__(self, instance, owner=None):
+        return partial(self.__func, owner, instance)
 
 # ctypes.LittleEndianStructure is not an instance of type, but an instance of
 # _ctypes.PyCStructType . So introspect that class to auto-determine the
