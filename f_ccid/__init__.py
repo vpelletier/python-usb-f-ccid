@@ -184,16 +184,9 @@ class ICCDFunction(functionfs.Function):
             },
         )
 
-    def onBind(self):
-        """
-        Called by FunctionFS when the gadget gets bound to the bus.
-        """
-        super().onBind()
-        self.__notifySlotChange()
-
     def onUnbind(self):
         """
-        Called by FunctionFS when the gadget gets unbound from the bus.
+        Called by FunctionFS when the gadget gets unbound from the UDC.
         """
         self._enabled = False
         for slot in self.slot_list:
@@ -202,7 +195,7 @@ class ICCDFunction(functionfs.Function):
 
     def onEnable(self):
         """
-        Called by FunctionFS when this function is enabled by an host.
+        Called by FunctionFS when this function is enabled by a host.
         """
         super().onEnable()
         self._enabled = True
@@ -210,27 +203,12 @@ class ICCDFunction(functionfs.Function):
 
     def onDisable(self):
         """
-        Called by FunctionFS when this function is disabled by an host.
+        Called by FunctionFS when this function is disabled by a host.
         """
         self._enabled = False
         for slot in self.slot_list:
             slot.powerOff()
         super().onDisable()
-
-    #def onSuspend(self):
-    #    """
-    #    Called by FunctionFS when USB bus enters suspended state.
-    #    """
-    #    for slot in self.slot_list:
-    #        slot.powerOff()
-    #    super().onSuspend()
-    #
-    #def onResume(self):
-    #    """
-    #    Called by FunctionFS when USB bus resumes from suspended state.
-    #    """
-    #    self.__notifySlotChange()
-    #    super().onResume()
 
     def onSetup(self, request_type, request, value, index, length):
         """
