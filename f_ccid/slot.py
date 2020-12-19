@@ -135,9 +135,7 @@ class ICCDSlot:
         if self.status == ICC_STATUS_INACTIVE:
             self.status = ICC_STATUS_ACTIVE
         assert not self._data
-        atr = self._card.getATR()
-        print('ICCDSlot.powerOn ATR:', atr.hex())
-        return atr
+        return self._card.getATR()
 
     def powerOff(self):
         """
