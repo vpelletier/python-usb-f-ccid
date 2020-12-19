@@ -270,7 +270,7 @@ class ICCDFunction(functionfs.Function):
         - message header: an ICCDMessageBase subclass instance
         - message body: a bytearray or None
         """
-        # XXX: handle EAGAIN ? seems unlikely to be reauired...
+        # XXX: handle EAGAIN ? seems unlikely to be required...
         buffer_list = []
         for head, body in response:
             buffer_list.append(functionfs.serialise(head))
