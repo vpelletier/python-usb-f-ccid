@@ -2,6 +2,13 @@ Userland USB Gadget implementation of CCID/ICCD class.
 
 Implements an N-slots USB virtual IC card reader.
 
+Requirements
+------------
+
+- Linux >= 4.9 for CCID class support
+- python3 (tested with 3.8 and 3.9)
+- python dependencies listed in setup.py
+
 Usage
 -----
 
