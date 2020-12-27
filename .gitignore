@@ -3,3 +3,4 @@
 /build/
 *.pyc
 *.swp
+__pycache__/

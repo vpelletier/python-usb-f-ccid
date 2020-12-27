@@ -16,6 +16,7 @@
 from setuptools import setup
 from codecs import open
 import os
+import versioneer
 
 long_description = open(
     os.path.join(os.path.dirname(__file__), 'README.rst'),
@@ -27,7 +28,8 @@ setup(
     description=next(x for x in long_description.splitlines() if x.strip()),
     long_description='.. contents::\n\n' + long_description,
     keywords='linux usb gadget ccid iccd',
-    version='0.1',
+    version=versioneer.get_version(),
+    cmdclass=versioneer.get_cmdclass(),
     author='Vincent Pelletier',
     author_email='plr.vincent@gmail.com',
     url='http://github.com/vpelletier/python-usb-f-ccid',

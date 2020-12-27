@@ -465,3 +465,7 @@ class ICCDFunction(functionfs.Function):
         #elif message_type == MESSAGE_TYPE_T0_APDU: # No T=0 protocol support
         #elif message_type == MESSAGE_TYPE_SECURE: # No pin pad
         return (getErrorResponse(ERROR_CMD_NOT_SUPPORTED), )
+
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions

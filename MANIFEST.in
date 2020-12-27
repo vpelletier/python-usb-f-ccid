@@ -1,0 +1,2 @@
+include versioneer.py
+include f_ccid/_version.py
